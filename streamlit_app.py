@@ -22,7 +22,7 @@ from generate_html import generate_html_report
 
 # 页面配置
 st.set_page_config(
-    page_title="参考文献核查工具",
+    page_title="参考文献核查",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -33,21 +33,6 @@ st.markdown("""
     .stTextArea textarea {
         font-family: 'Consolas', 'Monaco', monospace;
         font-size: 13px;
-    }
-    .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 20px;
-        border-radius: 10px;
-        margin-bottom: 20px;
-    }
-    .main-header h1 {
-        margin: 0;
-        font-size: 28px;
-    }
-    .main-header p {
-        margin: 5px 0 0 0;
-        opacity: 0.9;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -318,13 +303,9 @@ def display_results_table(results: list):
 
 def main():
     """主函数"""
-    # 标题区域
-    st.markdown("""
-    <div class="main-header">
-        <h1>参考文献核查工具</h1>
-        <p>粘贴参考文献 → 自动匹配验证 → 生成核查报告</p>
-    </div>
-    """, unsafe_allow_html=True)
+    # 标题区域 - 改为原生简洁风格
+    st.title("参考文献核查")
+    st.caption("粘贴参考文献 → 自动匹配验证 → 生成核查报告")
     
     # 使用说明
     with st.expander("使用说明", expanded=False):
