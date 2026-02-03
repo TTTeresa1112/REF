@@ -1,0 +1,7 @@
+requests
+pandas
+python-dotenv
+fuzzywuzzy
+python-Levenshtein
+dashscope
+streamlit
