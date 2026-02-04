@@ -623,7 +623,8 @@ def query_nlm_ids_by_doi(doi: str, api_key: Optional[str]) -> Tuple[str, str]:
 
 def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") -> Tuple[str, str]:
     """
-    通过DOI或PMID在NLM (PubMed)上查询更正和撤稿信息，并获取其DOI。
+    通过DOI或PMID在NLM (PubMed)上查询更正和撤稿信息。
+    结合了 pubtype 检查 (最准的状态) 和 commentscorrections 检查 (找撤稿声明链接)。
     """
     if not api_key:
         return "", ""
@@ -636,7 +637,7 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
     correction_doi, retraction_doi = "", ""
     
     try:
-        # Step 1: 如果没有PMID，先用DOI换PMID (原文的)
+        # 1. 换取 PMID
         if not pmid and doi:
             search_params = params.copy()
             search_params["term"] = f"{doi}[AID]"
@@ -651,20 +652,28 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
         if not pmid:
             return "", ""
             
-        # Step 2: 直接查原文的 Summary，看有没有被撤稿/更正的记录
+        # 2. 查 Summary (核心步骤)
         summary_params = params.copy()
         summary_params["id"] = pmid
         response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers)
         response.raise_for_status()
         summary_data = response.json()
         
-        # 收集需要查询DOI的 撤稿/更正 声明的PMID
-        notice_pmids = {} # {pmid: "type"}
-        
+        notice_pmids = {} # 用于存储声明的PMID，以便后续查DOI
+
         if "result" in summary_data and str(pmid) in summary_data["result"]:
             doc_info = summary_data["result"][str(pmid)]
             
-            # 检查 commentscorrections 字段 (这是正确的查询位置)
+            # 【关键改进 1】检查 pubtype 列表 (您的建议)
+            # 这是判断是否撤稿的最强依据
+            pubtype_list = doc_info.get("pubtype", [])
+            if "Retracted Publication" in pubtype_list:
+                print(f"    [!] PubType 标记为已撤稿")
+                # 如果还没找到撤稿声明的链接，先给个默认标记，确保报告变红
+                if not retraction_doi:
+                    retraction_doi = "Status: Retracted Publication"
+
+            # 【关键改进 2】检查 commentscorrections (为了找撤稿声明的具体链接)
             if "commentscorrections" in doc_info:
                 for ref in doc_info["commentscorrections"]:
                     ref_type = ref.get("reftype", "")
@@ -675,12 +684,10 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
                     elif ref_type == "ErratumIn":
                         notice_pmids[ref_pmid] = "correction"
 
-        # Step 3: 如果发现了撤稿/更正的PMID，额外查一次以获取它们的DOI
+        # 3. 如果找到了声明的 PMID，去换取它们的 DOI
         if notice_pmids:
-            # 批量查询这些声明的详细信息
-            notice_summary_params = params.copy()
-            notice_summary_params["id"] = ",".join(notice_pmids.keys())
-            response = requests.get(f"{base_url}esummary.fcgi", params=notice_summary_params, headers=headers)
+            summary_params["id"] = ",".join(notice_pmids.keys())
+            response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers)
             response.raise_for_status()
             notice_data = response.json()
             result = notice_data.get("result", {})
@@ -689,24 +696,21 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
                 info = result.get(notice_pmid, {})
                 article_ids = info.get("articleids", [])
                 
-                # 提取DOI
+                # 提取 DOI
                 found_doi = ""
                 for aid in article_ids:
                     if aid.get("idtype") == "doi":
                         found_doi = aid.get("value", "")
                         break
-                
-                # 如果没找到DOI，降级使用 PMID 格式
                 if not found_doi:
                     found_doi = f"PMID:{notice_pmid}"
                 
-                # 赋值并打印
                 if type_ == "retraction":
-                    retraction_doi = found_doi
-                    print(f"    NLM发现撤稿: {retraction_doi}")
+                    retraction_doi = found_doi  # 更新为具体的声明 DOI
+                    print(f"    NLM发现撤稿声明: {retraction_doi}")
                 elif type_ == "correction":
                     correction_doi = found_doi
-                    print(f"    NLM发现更正: {correction_doi}")
+                    print(f"    NLM发现更正声明: {correction_doi}")
 
     except requests.exceptions.RequestException as e:
         logger.error(f"NLM查询错误 (DOI: {doi}): {e}")
