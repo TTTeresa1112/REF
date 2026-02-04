@@ -145,43 +145,47 @@ def process_file(filepath: str):
         rid = f"B{idx}"
         match_status = item.get("match_status", "")
         
-        # Determine query title
-        query_title = ""
-        if match_status == "match":
-            query_title = clean_title(item.get("title", ""))
-        else:
-            query_title = clean_title(item.get("ai_extracted_title", ""))
-        
         # Defaults
         final_doi = ""
         final_pmid = ""
         final_pmcid = ""
         final_title = ""
         
-        if query_title:
-            # Step 1: Search for PMID
-            pmid = search_pubmed(query_title)
+        if match_status == "match":
+            # For matched entries: directly use the data from generate_json.py
+            # These were already queried via Crossref + NLM
+            final_pmid = item.get("pmid", "")
+            final_pmcid = item.get("pmcid", "")
+            final_doi = item.get("api_doi", "") or item.get("extracted_doi", "")
+            final_title = item.get("title", "")
             
-            if pmid:
-                final_pmid = pmid
-                # Step 2: Get Details
-                details = get_pubmed_details(pmid)
-                final_doi = details.get("doi", "")
-                final_pmcid = details.get("pmcid", "")
-                final_title = details.get("article_title", "")
-                
-                # If API didn't give a DOI, maybe use the one we already had if it was a match?
-                # User asked to use API results, but logically if we have a DOI from CrossRef (match), 
-                # and NLM doesn't return it, we might want to keep the original? 
-                # BUT user prompt said: "use title to query NLM... add to json", implying NLM is the source of truth for this new file.
-                # So I will stick to what NLM returns. If NLM misses DOI, it's empty.
-                
-                print(f"    -> Found PMID: {pmid}")
+            if final_pmid:
+                print(f"    -> Using cached data: PMID={final_pmid}, PMCID={final_pmcid or 'N/A'}")
             else:
-                print(f"    -> No match in NLM for title: {query_title[:50]}...")
-                # If NLM fails but we had a cache match with DOI, user didn't explicitly say "fallback to cache DOI".
-                # User said: "get pmid and pmcid and doi, add to json".
-                # I'll leave them empty if NLM doesn't find them, as per strict interpretation.
+                print(f"    -> Match found but no PMID in cache (DOI: {final_doi or 'N/A'})")
+        else:
+            # For non-match entries: query NLM using AI extracted title
+            query_title = clean_title(item.get("ai_extracted_title", ""))
+            
+            if query_title:
+                # Step 1: Search for PMID
+                pmid = search_pubmed(query_title)
+                
+                if pmid:
+                    final_pmid = pmid
+                    # Step 2: Get Details
+                    details = get_pubmed_details(pmid)
+                    final_doi = details.get("doi", "")
+                    final_pmcid = details.get("pmcid", "")
+                    final_title = details.get("article_title", "")
+                    
+                    print(f"    -> Found PMID: {pmid}")
+                else:
+                    print(f"    -> No match in NLM for title: {query_title[:50]}...")
+                    # Keep the AI extracted title as fallback
+                    final_title = query_title
+            else:
+                print(f"    -> No query title available for non-match entry")
         
         # Construct output entry
         entry = {
@@ -190,19 +194,17 @@ def process_file(filepath: str):
             "doi": final_doi,
             "pmid": final_pmid,
             "pmcid": final_pmcid,
-            "article_title": final_title if final_title else query_title # Fallback to query title if NLM title is empty? User said "Real Title from API". If API fails, maybe leave empty? I'll leave empty if API returns nothing to be safe.
+            "article_title": final_title
         }
-        
-        # Small correction: if article_title is empty, maybe we shouldn't return 'Real Title from API' literally, but the concept.
-        # If API search fails, title will be empty.
         
         output_list.append(entry)
         
-        # Rate limiting
-        if not NCBI_API_KEY:
-            time.sleep(0.34) # Max 3 req/s without key -> sleep ~340ms to be safe
-        else:
-            time.sleep(0.1) # Max 10 req/s with key
+        # Rate limiting (only for non-match entries that query NLM)
+        if match_status != "match":
+            if not NCBI_API_KEY:
+                time.sleep(0.34) # Max 3 req/s without key -> sleep ~340ms to be safe
+            else:
+                time.sleep(0.1) # Max 10 req/s with key
             
     # Save output
     base_name = os.path.splitext(os.path.basename(filepath))[0]
