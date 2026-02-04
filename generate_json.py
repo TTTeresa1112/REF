@@ -673,16 +673,23 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
                 if not retraction_doi:
                     retraction_doi = "Status: Retracted Publication"
 
-            # 【关键改进 2】检查 commentscorrections (为了找撤稿声明的具体链接)
-            if "commentscorrections" in doc_info:
-                for ref in doc_info["commentscorrections"]:
-                    ref_type = ref.get("reftype", "")
-                    ref_pmid = str(ref.get("id", ""))
+            # 【关键改进 2】检查 references 字段 (esummary 返回的正确字段名)
+            # reftype 的可能值包括: "Erratum in", "Retraction in", "Expression of concern in" 等
+            if "references" in doc_info:
+                for ref in doc_info["references"]:
+                    ref_type = ref.get("reftype", "").lower()
+                    ref_pmid = str(ref.get("pmid", ""))
                     
-                    if ref_type == "RetractionIn":
+                    if "retraction" in ref_type:
                         notice_pmids[ref_pmid] = "retraction"
-                    elif ref_type == "ErratumIn":
+                        print(f"    [!] References发现撤稿相关标记: {ref_type}")
+                    elif "erratum" in ref_type or "correction" in ref_type:
                         notice_pmids[ref_pmid] = "correction"
+                        print(f"    [!] References发现更正相关标记: {ref_type}")
+                    elif "expression of concern" in ref_type:
+                        # Expression of Concern 也是一种警告，可以当作更正处理
+                        notice_pmids[ref_pmid] = "correction"
+                        print(f"    [!] References发现关注表达: {ref_type}")
 
         # 3. 如果找到了声明的 PMID，去换取它们的 DOI
         if notice_pmids:
