@@ -112,7 +112,7 @@ class CrossrefData:
     has_retraction: bool = False
     correction_doi: str = ""
     retraction_doi: str = ""
-    all_authors: List[str] = None # New field for full author audit
+    all_authors: List[str] = None
 
     @classmethod
     def from_api_response(cls, item: dict) -> 'CrossrefData':
@@ -622,15 +622,8 @@ def query_nlm_ids_by_doi(doi: str, api_key: Optional[str]) -> Tuple[str, str]:
 
 
 def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") -> Tuple[str, str]:
-    """通过DOI或PMID在NLM (PubMed)上查询更正和撤稿信息。
-    
-    Args:
-        doi: 文献的DOI
-        api_key: NCBI API密钥
-        pmid: 可选的PMID，如果已有则跳过esearch查询
-        
-    Returns:
-        Tuple of (correction_doi, retraction_doi)
+    """
+    通过DOI或PMID在NLM (PubMed)上查询更正和撤稿信息，并获取其DOI。
     """
     if not api_key:
         return "", ""
@@ -643,7 +636,7 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
     correction_doi, retraction_doi = "", ""
     
     try:
-        # 如果没有提供PMID，则通过DOI查询
+        # Step 1: 如果没有PMID，先用DOI换PMID (原文的)
         if not pmid and doi:
             search_params = params.copy()
             search_params["term"] = f"{doi}[AID]"
@@ -658,38 +651,66 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
         if not pmid:
             return "", ""
             
-        for link_type in ["pubmed_pubmed_erratum", "pubmed_pubmed_retraction"]:
-            elink_params = params.copy()
-            elink_params.update({"dbfrom": "pubmed", "id": pmid, "linkname": link_type})
-            response = requests.get(f"{base_url}elink.fcgi", params=elink_params, headers=headers)
+        # Step 2: 直接查原文的 Summary，看有没有被撤稿/更正的记录
+        summary_params = params.copy()
+        summary_params["id"] = pmid
+        response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers)
+        response.raise_for_status()
+        summary_data = response.json()
+        
+        # 收集需要查询DOI的 撤稿/更正 声明的PMID
+        notice_pmids = {} # {pmid: "type"}
+        
+        if "result" in summary_data and str(pmid) in summary_data["result"]:
+            doc_info = summary_data["result"][str(pmid)]
+            
+            # 检查 commentscorrections 字段 (这是正确的查询位置)
+            if "commentscorrections" in doc_info:
+                for ref in doc_info["commentscorrections"]:
+                    ref_type = ref.get("reftype", "")
+                    ref_pmid = str(ref.get("id", ""))
+                    
+                    if ref_type == "RetractionIn":
+                        notice_pmids[ref_pmid] = "retraction"
+                    elif ref_type == "ErratumIn":
+                        notice_pmids[ref_pmid] = "correction"
+
+        # Step 3: 如果发现了撤稿/更正的PMID，额外查一次以获取它们的DOI
+        if notice_pmids:
+            # 批量查询这些声明的详细信息
+            notice_summary_params = params.copy()
+            notice_summary_params["id"] = ",".join(notice_pmids.keys())
+            response = requests.get(f"{base_url}esummary.fcgi", params=notice_summary_params, headers=headers)
             response.raise_for_status()
-            elink_data = response.json()
-            linked_pmids = []
-            linksets = elink_data.get("linksets", [])
-            if linksets and "linksetdbs" in linksets[0] and linksets[0]["linksetdbs"]:
-                linked_pmids = linksets[0]["linksetdbs"][0].get("links", [])
-            if linked_pmids:
-                summary_params = params.copy()
-                summary_params["id"] = ",".join(linked_pmids)
-                response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers)
-                response.raise_for_status()
-                summary_data = response.json()
-                result = summary_data.get("result", {})
-                for linked_pmid in linked_pmids:
-                    article_info = result.get(str(linked_pmid), {})
-                    article_ids = article_info.get("articleids", [])
-                    for aid in article_ids:
-                        if aid.get("idtype") == "doi":
-                            found_doi = aid.get("value", "")
-                            if link_type == "pubmed_pubmed_erratum":
-                                correction_doi = found_doi
-                                print(f"    NLM发现更正: {correction_doi}")
-                            elif link_type == "pubmed_pubmed_retraction":
-                                retraction_doi = found_doi
-                                print(f"    NLM发现撤稿: {retraction_doi}")
-                            break
+            notice_data = response.json()
+            result = notice_data.get("result", {})
+            
+            for notice_pmid, type_ in notice_pmids.items():
+                info = result.get(notice_pmid, {})
+                article_ids = info.get("articleids", [])
+                
+                # 提取DOI
+                found_doi = ""
+                for aid in article_ids:
+                    if aid.get("idtype") == "doi":
+                        found_doi = aid.get("value", "")
+                        break
+                
+                # 如果没找到DOI，降级使用 PMID 格式
+                if not found_doi:
+                    found_doi = f"PMID:{notice_pmid}"
+                
+                # 赋值并打印
+                if type_ == "retraction":
+                    retraction_doi = found_doi
+                    print(f"    NLM发现撤稿: {retraction_doi}")
+                elif type_ == "correction":
+                    correction_doi = found_doi
+                    print(f"    NLM发现更正: {correction_doi}")
+
     except requests.exceptions.RequestException as e:
         logger.error(f"NLM查询错误 (DOI: {doi}): {e}")
+        
     return correction_doi, retraction_doi
 
 
