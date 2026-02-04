@@ -636,6 +636,22 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
     headers = {"User-Agent": USER_AGENT}
     correction_doi, retraction_doi = "", ""
     
+    # ===================== 【新增常量】统归的reftype短语列表 =====================
+    # 统归为更正的reftype（精确匹配）
+    CORRECTION_REFTYPES = [
+        "Erratum in",
+        "Corrected and republished in",
+        "Corrected and republished from"
+    ]
+    # 统归为撤稿的reftype（精确匹配）
+    RETRACTION_REFTYPES = [
+        "Retraction in",
+        "Retraction of",
+        "Retracted and republished in",
+        "Retracted and republished from"
+    ]
+    # ============================================================================
+    
     try:
         # 1. 换取 PMID
         if not pmid and doi:
@@ -664,34 +680,34 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
         if "result" in summary_data and str(pmid) in summary_data["result"]:
             doc_info = summary_data["result"][str(pmid)]
             
-            # 【关键改进 1】检查 pubtype 列表 (您的建议)
-            # 这是判断是否撤稿的最强依据
+            # 检查 pubtype 列表 (原有逻辑，未修改)
             pubtype_list = doc_info.get("pubtype", [])
             if "Retracted Publication" in pubtype_list:
                 print(f"    [!] PubType 标记为已撤稿")
-                # 如果还没找到撤稿声明的链接，先给个默认标记，确保报告变红
                 if not retraction_doi:
                     retraction_doi = "Status: Retracted Publication"
 
-            # 【关键改进 2】检查 references 字段 (esummary 返回的正确字段名)
-            # reftype 的可能值包括: "Erratum in", "Retraction in", "Expression of concern in" 等
+            # 检查 references 字段 (核心修改：模糊匹配 → 精确匹配指定短语)
             if "references" in doc_info:
                 for ref in doc_info["references"]:
-                    ref_type = ref.get("reftype", "").lower()
+                    # 去掉lower()，保留原字符串并去首尾空格，避免空格导致匹配失败
+                    ref_type = ref.get("reftype", "").strip()
                     ref_pmid = str(ref.get("pmid", ""))
                     
-                    if "retraction" in ref_type:
+                    # ===================== 【修改判断逻辑】精确匹配统归列表 =====================
+                    if ref_type in RETRACTION_REFTYPES:
                         notice_pmids[ref_pmid] = "retraction"
                         print(f"    [!] References发现撤稿相关标记: {ref_type}")
-                    elif "erratum" in ref_type or "correction" in ref_type:
+                    elif ref_type in CORRECTION_REFTYPES:
                         notice_pmids[ref_pmid] = "correction"
                         print(f"    [!] References发现更正相关标记: {ref_type}")
-                    elif "expression of concern" in ref_type:
-                        # Expression of Concern 也是一种警告，可以当作更正处理
+                    elif "expression of concern" in ref_type.lower():
+                        # 关注表达仍保留模糊匹配，归为更正（原有逻辑，未修改）
                         notice_pmids[ref_pmid] = "correction"
                         print(f"    [!] References发现关注表达: {ref_type}")
+                    # ============================================================================
 
-        # 3. 如果找到了声明的 PMID，去换取它们的 DOI
+        # 3. 如果找到了声明的 PMID，去换取它们的 DOI (原有逻辑，未修改)
         if notice_pmids:
             summary_params["id"] = ",".join(notice_pmids.keys())
             response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers)
