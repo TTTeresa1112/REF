@@ -553,25 +553,111 @@ def build_search_query(diagnosis_tag: str, title: str, chapter: str, book_title:
     return " ".join(parts)
 
 
-def query_nlm_for_corrections(doi: str, api_key: Optional[str]) -> Tuple[str, str]:
-    """通过DOI在NLM (PubMed)上查询更正和撤稿信息。"""
+def query_nlm_ids_by_doi(doi: str, api_key: Optional[str]) -> Tuple[str, str]:
+    """通过DOI在NLM (PubMed)上查询PMID和PMCID。
+    
+    Args:
+        doi: 文献的DOI
+        api_key: NCBI API密钥
+        
+    Returns:
+        Tuple of (pmid, pmcid)
+    """
     if not doi or not api_key:
         return "", ""
+    
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
-    params = {"db": "pubmed", "retmode": "json", "api_key": api_key}
     headers = {"User-Agent": USER_AGENT}
-    correction_doi, retraction_doi = "", ""
+    pmid = ""
+    pmcid = ""
+    
     try:
-        search_params = params.copy()
-        search_params["term"] = f"{doi}[AID]"
+        # Step 1: 使用 esearch 通过 DOI 查找 PMID
+        search_params = {
+            "db": "pubmed",
+            "retmode": "json",
+            "api_key": api_key,
+            "term": f"{doi}[AID]"
+        }
         response = requests.get(f"{base_url}esearch.fcgi", params=search_params, headers=headers)
         response.raise_for_status()
         search_data = response.json()
         id_list = search_data.get("esearchresult", {}).get("idlist", [])
+        
         if not id_list:
             print(f"    NLM中未找到DOI: {doi}")
             return "", ""
+        
         pmid = id_list[0]
+        print(f"    NLM查询到PMID: {pmid}")
+        
+        # Step 2: 使用 esummary 获取 PMCID
+        summary_params = {
+            "db": "pubmed",
+            "retmode": "json",
+            "api_key": api_key,
+            "id": pmid
+        }
+        response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers)
+        response.raise_for_status()
+        summary_data = response.json()
+        
+        result = summary_data.get("result", {})
+        article_info = result.get(str(pmid), {})
+        article_ids = article_info.get("articleids", [])
+        
+        for aid in article_ids:
+            if aid.get("idtype") == "pmc":
+                pmcid = aid.get("value", "")
+                print(f"    NLM查询到PMCID: {pmcid}")
+                break
+        
+        if not pmcid:
+            print(f"    未找到PMCID")
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"NLM ID查询错误 (DOI: {doi}): {e}")
+    
+    return pmid, pmcid
+
+
+def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") -> Tuple[str, str]:
+    """通过DOI或PMID在NLM (PubMed)上查询更正和撤稿信息。
+    
+    Args:
+        doi: 文献的DOI
+        api_key: NCBI API密钥
+        pmid: 可选的PMID，如果已有则跳过esearch查询
+        
+    Returns:
+        Tuple of (correction_doi, retraction_doi)
+    """
+    if not api_key:
+        return "", ""
+    if not doi and not pmid:
+        return "", ""
+        
+    base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+    params = {"db": "pubmed", "retmode": "json", "api_key": api_key}
+    headers = {"User-Agent": USER_AGENT}
+    correction_doi, retraction_doi = "", ""
+    
+    try:
+        # 如果没有提供PMID，则通过DOI查询
+        if not pmid and doi:
+            search_params = params.copy()
+            search_params["term"] = f"{doi}[AID]"
+            response = requests.get(f"{base_url}esearch.fcgi", params=search_params, headers=headers)
+            response.raise_for_status()
+            search_data = response.json()
+            id_list = search_data.get("esearchresult", {}).get("idlist", [])
+            if not id_list:
+                return "", ""
+            pmid = id_list[0]
+        
+        if not pmid:
+            return "", ""
+            
         for link_type in ["pubmed_pubmed_erratum", "pubmed_pubmed_retraction"]:
             elink_params = params.copy()
             elink_params.update({"dbfrom": "pubmed", "id": pmid, "linkname": link_type})
@@ -647,6 +733,8 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
     ai_search_query = ""     # AI generated optimized search query
     matched_ref_str = ""
     crossref_data = None
+    pmid = ""    # PubMed ID
+    pmcid = ""   # PubMed Central ID
     
     # Calculate cleaned ref for global duplicate checking
     cleaned_original_ref = re.sub(r'^\d+\.?\s*|https?://\S+', '', ref).lower()
@@ -713,9 +801,12 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
         has_retraction = crossref_data.has_retraction
         has_correction = crossref_data.has_correction
         
-        # Check NLM for additional retraction/correction info if DOI exists
+        # Check NLM for PMID, PMCID and additional retraction/correction info if DOI exists
         if crossref_data.doi and NCBI_API_KEY:
-             corr, retr = query_nlm_for_corrections(crossref_data.doi, NCBI_API_KEY)
+             # 查询 PMID 和 PMCID
+             pmid, pmcid = query_nlm_ids_by_doi(crossref_data.doi, NCBI_API_KEY)
+             # 使用已获取的PMID查询更正和撤稿信息（避免重复调用esearch）
+             corr, retr = query_nlm_for_corrections(crossref_data.doi, NCBI_API_KEY, pmid)
              if retr: has_retraction = True
              if corr: has_correction = True
 
@@ -758,6 +849,8 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
         "journal": journal,
         "year": year,
         "all_authors": all_authors,
+        "pmid": pmid,
+        "pmcid": pmcid,
         "is_recent_5_years": is_recent_5,
         "is_recent_3_years": is_recent_3,
         "ai_diagnosis": ai_diag,
