@@ -1134,9 +1134,9 @@ def process_file(input_file: str, status_callback: Callable[[str], None] = None)
                 continue
                 
             if idx > 1 and idx % 100 == 0:
-                print(f"\n⏸ 已处理 {idx} 条，休息60秒防止API被限速...")
-                logger.info(f"处理到第 {idx} 条，暂停60秒")
-                time.sleep(60)
+                print(f"\n⏸ 已处理 {idx} 条，休息10秒防止API被限速...")
+                logger.info(f"处理到第 {idx} 条，暂停10秒")
+                time.sleep(10)
             
             if status_callback:
                 status_callback(f"正在处理 {idx}/{total_refs}...")

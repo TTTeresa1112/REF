@@ -10,6 +10,7 @@ import tempfile
 import os
 import time
 import datetime
+import random
 
 # 导入核心处理函数
 from generate_json import (
@@ -104,7 +105,7 @@ def process_references(refs: list) -> tuple:
         progress_bar.progress(idx / total)
         
         # 适当延迟避免 API 限速（缓存命中时不需要延迟）
-        time.sleep(0.1)
+        time.sleep(0.5 + random.uniform(0, 0.5))
     
     status_container.success(f"处理完成！共处理 {total} 条参考文献")
     
