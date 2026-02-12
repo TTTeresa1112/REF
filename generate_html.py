@@ -328,7 +328,7 @@ def generate_html_report(json_file_path: str) -> str:
                 <div class="card-icon">⚠️</div>
                 <div class="card-content">
                     <div class="card-value">''' + str(high_risk_count) + ''' <small>(''' + calc_pct(high_risk_count) + ''')</small></div>
-                    <div class="card-label">未检索到</div>
+                    <div class="card-label">无法判断</div>
                 </div>
             </div>
             <div class="card card-doi-dup">
@@ -403,7 +403,7 @@ def generate_html_report(json_file_path: str) -> str:
                 <select id="statusFilter" onchange="applyFilters()">
                     <option value="all">全部</option>
                     <option value="match">✅ 通过</option>
-                    <option value="high-risk"> 未检索到</option>
+                    <option value="high-risk">⚠️ 无法判断</option>
                     <option value="retracted">🚨 撤稿</option>
                     <option value="doi-dup">🔴 DOI重复</option>
                     <option value="fuzzy-dup">🟠 模糊重复</option>
@@ -517,7 +517,7 @@ def generate_html_report(json_file_path: str) -> str:
         # AI Badge
         ai_badge = ''
         if ai_diag == 'HIGH_RISK':
-            ai_badge = '<span class="badge red">⚠️ 未检索到</span>'
+            ai_badge = '<span class="badge red">⚠️ 无法判断</span>'
         elif ai_diag == 'BOOK':
             ai_badge = '<span class="badge blue">📘 书籍</span>'
         elif ai_diag == 'CONF':

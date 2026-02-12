@@ -323,7 +323,7 @@ def display_results_table(results: list):
         if item.get('has_retraction'):
             status = "撤稿"
         elif item.get('ai_diagnosis') == 'HIGH_RISK':
-            status = "高危"
+            status = "无法判断"
         elif item.get('fuzzy_duplicates'):
             status = "重复"
         elif item.get('match_status') == 'match':
