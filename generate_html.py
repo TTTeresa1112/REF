@@ -28,20 +28,26 @@ def generate_html_report(json_file_path: str) -> str:
     
     # DOI重复统计
     doi_count_map = {}
-    for item in results:
+    for idx, item in enumerate(results):
         api_doi = item.get('api_doi', item.get('doi', ''))
         if api_doi:
-            doi_count_map[api_doi] = doi_count_map.get(api_doi, 0) + 1
+            if api_doi not in doi_count_map:
+                doi_count_map[api_doi] = []
+            doi_count_map[api_doi].append(idx)
     
-    # 标记DOI重复项并统计
+    # 标记DOI重复项并统计，同时生成重复信息文本
     doi_duplicate_count = 0
     for idx, item in enumerate(results):
         api_doi = item.get('api_doi', item.get('doi', ''))
-        if api_doi and doi_count_map.get(api_doi, 0) > 1:
+        if api_doi and len(doi_count_map.get(api_doi, [])) > 1:
             item['is_doi_duplicate'] = True
             doi_duplicate_count += 1
+            # 生成DOI重复信息文本（显示与哪些ref重复）
+            other_refs = [str(i + 1) for i in doi_count_map[api_doi] if i != idx]
+            item['doi_duplicate_info'] = f"DOI与ref. {', '.join(other_refs)} 重复"
         else:
             item['is_doi_duplicate'] = False
+            item['doi_duplicate_info'] = ''
     
     # 模糊重复统计
     fuzzy_duplicate_count = 0
@@ -88,7 +94,8 @@ def generate_html_report(json_file_path: str) -> str:
     <title>参考文献审计报告</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { 
+        body {
+
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             background: #f5f7fa;
             color: #333;
@@ -102,18 +109,17 @@ def generate_html_report(json_file_path: str) -> str:
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 20px 24px;
+            padding: 14px 24px;
             border-radius: 10px;
             margin-bottom: 16px;
             box-shadow: 0 3px 10px rgba(102, 126, 234, 0.25);
         }
-        .header h1 { font-size: 22px; font-weight: 600; }
-        .header p { opacity: 0.9; margin-top: 4px; font-size: 13px; }
+        .header p { opacity: 0.9; font-size: 13px; }
         
         /* Dashboard - Compact */
         .dashboard {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            grid-template-columns: repeat(5, 1fr);
             gap: 10px;
             margin-bottom: 16px;
         }
@@ -135,6 +141,7 @@ def generate_html_report(json_file_path: str) -> str:
         .card-highrisk { border-left: 3px solid #f97316; }
         .card-doi-dup { border-left: 3px solid #ef4444; }
         .card-fuzzy-dup { border-left: 3px solid #fb923c; }
+        .card-mismatch { border-left: 3px solid #eab308; }
         .card-match { border-left: 3px solid #22c55e; }
         .card-stat { border-left: 3px solid #8b5cf6; }
         
@@ -288,12 +295,23 @@ def generate_html_report(json_file_path: str) -> str:
             .filters { flex-direction: column; align-items: flex-start; }
             .result-count { margin-left: 0; }
         }
+
+        .doi-dup-warning {
+            font-size: 11px;
+            color: #991b1b;
+            margin-top: 4px;
+            font-weight: 600;
+            background: #fee2e2;
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+            border: 1px solid #fca5a5;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>📋 参考文献审计报告</h1>
             <p>生成时间: ''' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '''</p>
         </div>
         
@@ -307,10 +325,10 @@ def generate_html_report(json_file_path: str) -> str:
                 </div>
             </div>
             <div class="card card-highrisk">
-                <div class="card-icon">💀</div>
+                <div class="card-icon">⚠️</div>
                 <div class="card-content">
                     <div class="card-value">''' + str(high_risk_count) + ''' <small>(''' + calc_pct(high_risk_count) + ''')</small></div>
-                    <div class="card-label">高危</div>
+                    <div class="card-label">未检索到</div>
                 </div>
             </div>
             <div class="card card-doi-dup">
@@ -325,6 +343,13 @@ def generate_html_report(json_file_path: str) -> str:
                 <div class="card-content">
                     <div class="card-value">''' + str(fuzzy_duplicate_count) + ''' <small>(''' + calc_pct(fuzzy_duplicate_count) + ''')</small></div>
                     <div class="card-label">模糊重复</div>
+                </div>
+            </div>
+            <div class="card card-mismatch">
+                <div class="card-icon">💀</div>
+                <div class="card-content">
+                    <div class="card-value">''' + str(mismatch_count) + ''' <small>(''' + calc_pct(mismatch_count) + ''')</small></div>
+                    <div class="card-label">DOI不符</div>
                 </div>
             </div>
             <div class="card card-match">
@@ -378,11 +403,11 @@ def generate_html_report(json_file_path: str) -> str:
                 <select id="statusFilter" onchange="applyFilters()">
                     <option value="all">全部</option>
                     <option value="match">✅ 通过</option>
-                    <option value="high-risk">💀 高危</option>
+                    <option value="high-risk"> 未检索到</option>
                     <option value="retracted">🚨 撤稿</option>
                     <option value="doi-dup">🔴 DOI重复</option>
                     <option value="fuzzy-dup">🟠 模糊重复</option>
-                    <option value="mismatch">⚠️ DOI不符</option>
+                    <option value="mismatch">💀 DOI不符</option>
                     <option value="unknown">❓ 其他</option>
                 </select>
             </div>
@@ -473,9 +498,9 @@ def generate_html_report(json_file_path: str) -> str:
         elif status_category == 'fuzzy-dup':
             status_icon = '🟠'
         elif status_category == 'mismatch':
-            status_icon = '⚠️'
-        elif status_category == 'high-risk':
             status_icon = '💀'
+        elif status_category == 'high-risk':
+            status_icon = '⚠️'
         elif ai_diag == 'BOOK':
             status_icon = '📘'
         elif ai_diag == 'CONF':
@@ -492,7 +517,7 @@ def generate_html_report(json_file_path: str) -> str:
         # AI Badge
         ai_badge = ''
         if ai_diag == 'HIGH_RISK':
-            ai_badge = '<span class="badge red">💀 高危</span>'
+            ai_badge = '<span class="badge red">⚠️ 未检索到</span>'
         elif ai_diag == 'BOOK':
             ai_badge = '<span class="badge blue">📘 书籍</span>'
         elif ai_diag == 'CONF':
@@ -517,11 +542,17 @@ def generate_html_report(json_file_path: str) -> str:
                 author_warning = f'<div class="author-warning">⚠️ 频繁引用: {author}</div>'
                 break
         
+        # DOI重复警告
+        doi_dup_warning = ''
+        doi_dup_info = item.get('doi_duplicate_info', '')
+        if doi_dup_info:
+            doi_dup_warning = f'<div class="doi-dup-warning">🔴 {doi_dup_info}</div>'
+        
         # 模糊重复警告
         dup_warning = ''
         fuzzy_msg = item.get('fuzzy_duplicates', '')
         if fuzzy_msg:
-            dup_warning = f'<div class="duplicate-warning">🔗 {fuzzy_msg}</div>'
+            dup_warning = f'<div class="duplicate-warning">� {fuzzy_msg}</div>'
 
         # 操作按钮
         action_btn = ''
@@ -558,6 +589,7 @@ def generate_html_report(json_file_path: str) -> str:
                             <div class="ref-text">{original_text[:280]}{'...' if len(original_text) > 280 else ''}</div>
                             {ai_badge}
                             
+                            {doi_dup_warning}
                             {dup_warning}
                             
                             {match_info}
