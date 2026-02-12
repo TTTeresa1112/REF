@@ -265,7 +265,7 @@ def format_reference_apa(crossref_data: CrossrefData) -> str:
     return " ".join(parts)
 
 
-def query_crossref_by_doi(doi: str) -> Optional[CrossrefData]:
+def query_crossref_by_doi(doi: str, ref_index: int = 0) -> Optional[CrossrefData]:
     """通过DOI直接查询Crossref"""
     if not doi:
         return None
@@ -278,13 +278,17 @@ def query_crossref_by_doi(doi: str) -> Optional[CrossrefData]:
     url = f"https://api.crossref.org/works/{clean_doi}"
     headers = {"User-Agent": USER_AGENT, "mailto": MY_EMAIL}
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         data = response.json()
         if 'message' in data:
             return CrossrefData.from_api_response(data['message'])
         return None
-    except Exception as e:
+    except requests.exceptions.Timeout:
+        logger.warning(f"Ref.{ref_index} Crossref DOI查询超时 (DOI: {clean_doi})")
+        print(f"    ⚠ Ref.{ref_index} Crossref DOI查询超时，已跳过")
+        raise  # 向上抛出以便标记 timeout_error
+    except requests.exceptions.RequestException as e:
         logger.error(f"Crossref DOI查询错误: {e}")
         return None
 
@@ -315,20 +319,24 @@ def extract_doi_from_text(text: str) -> Optional[str]:
     return None
 
 
-def query_crossref_search(reference: str) -> Optional[CrossrefData]:
+def query_crossref_search(reference: str, ref_index: int = 0) -> Optional[CrossrefData]:
     """通过全文搜索查询Crossref (Fallback)"""
     url = "https://api.crossref.org/works"
     headers = {"User-Agent": USER_AGENT, "mailto": MY_EMAIL} 
     params = {"query.bibliographic": reference, "rows": 1}
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(url, headers=headers, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
         items = data.get('message', {}).get('items', [])
         if items:
             return CrossrefData.from_api_response(items[0])
         return None
-    except Exception as e:
+    except requests.exceptions.Timeout:
+        logger.warning(f"Ref.{ref_index} Crossref Search超时")
+        print(f"    ⚠ Ref.{ref_index} Crossref Search超时，已跳过")
+        raise  # 向上抛出以便标记 timeout_error
+    except requests.exceptions.RequestException as e:
         logger.error(f"Crossref Search Error: {e}")
         return None
 
@@ -553,12 +561,13 @@ def build_search_query(diagnosis_tag: str, title: str, chapter: str, book_title:
     return " ".join(parts)
 
 
-def query_nlm_ids_by_doi(doi: str, api_key: Optional[str]) -> Tuple[str, str]:
+def query_nlm_ids_by_doi(doi: str, api_key: Optional[str], ref_index: int = 0) -> Tuple[str, str]:
     """通过DOI在NLM (PubMed)上查询PMID和PMCID。
     
     Args:
         doi: 文献的DOI
         api_key: NCBI API密钥
+        ref_index: 当前处理的参考文献索引
         
     Returns:
         Tuple of (pmid, pmcid)
@@ -579,7 +588,7 @@ def query_nlm_ids_by_doi(doi: str, api_key: Optional[str]) -> Tuple[str, str]:
             "api_key": api_key,
             "term": f"{doi}[AID]"
         }
-        response = requests.get(f"{base_url}esearch.fcgi", params=search_params, headers=headers)
+        response = requests.get(f"{base_url}esearch.fcgi", params=search_params, headers=headers, timeout=30)
         response.raise_for_status()
         search_data = response.json()
         id_list = search_data.get("esearchresult", {}).get("idlist", [])
@@ -598,7 +607,7 @@ def query_nlm_ids_by_doi(doi: str, api_key: Optional[str]) -> Tuple[str, str]:
             "api_key": api_key,
             "id": pmid
         }
-        response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers)
+        response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers, timeout=30)
         response.raise_for_status()
         summary_data = response.json()
         
@@ -614,14 +623,18 @@ def query_nlm_ids_by_doi(doi: str, api_key: Optional[str]) -> Tuple[str, str]:
         
         if not pmcid:
             print(f"    未找到PMCID")
-            
+    
+    except requests.exceptions.Timeout:
+        logger.warning(f"Ref.{ref_index} NLM ID查询超时 (DOI: {doi})")
+        print(f"    ⚠ Ref.{ref_index} NLM ID查询超时，已跳过")
+        raise  # 向上抛出以便标记 timeout_error
     except requests.exceptions.RequestException as e:
         logger.error(f"NLM ID查询错误 (DOI: {doi}): {e}")
     
     return pmid, pmcid
 
 
-def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") -> Tuple[str, str]:
+def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "", ref_index: int = 0) -> Tuple[str, str]:
     """
     通过DOI或PMID在NLM (PubMed)上查询更正和撤稿信息。
     结合了 pubtype 检查 (最准的状态) 和 commentscorrections 检查 (找撤稿声明链接)。
@@ -657,7 +670,7 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
         if not pmid and doi:
             search_params = params.copy()
             search_params["term"] = f"{doi}[AID]"
-            response = requests.get(f"{base_url}esearch.fcgi", params=search_params, headers=headers)
+            response = requests.get(f"{base_url}esearch.fcgi", params=search_params, headers=headers, timeout=30)
             response.raise_for_status()
             search_data = response.json()
             id_list = search_data.get("esearchresult", {}).get("idlist", [])
@@ -671,7 +684,7 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
         # 2. 查 Summary (核心步骤)
         summary_params = params.copy()
         summary_params["id"] = pmid
-        response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers)
+        response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers, timeout=30)
         response.raise_for_status()
         summary_data = response.json()
         
@@ -710,7 +723,7 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
         # 3. 如果找到了声明的 PMID，去换取它们的 DOI (原有逻辑，未修改)
         if notice_pmids:
             summary_params["id"] = ",".join(notice_pmids.keys())
-            response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers)
+            response = requests.get(f"{base_url}esummary.fcgi", params=summary_params, headers=headers, timeout=30)
             response.raise_for_status()
             notice_data = response.json()
             result = notice_data.get("result", {})
@@ -735,6 +748,10 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "") 
                     correction_doi = found_doi
                     print(f"    NLM发现更正声明: {correction_doi}")
 
+    except requests.exceptions.Timeout:
+        logger.warning(f"Ref.{ref_index} NLM查询超时 (DOI: {doi})")
+        print(f"    ⚠ Ref.{ref_index} NLM查询超时，已跳过")
+        raise  # 向上抛出以便标记 timeout_error
     except requests.exceptions.RequestException as e:
         logger.error(f"NLM查询错误 (DOI: {doi}): {e}")
         
@@ -783,6 +800,7 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
     crossref_data = None
     pmid = ""    # PubMed ID
     pmcid = ""   # PubMed Central ID
+    timeout_error = False    # 超时标记
     
     # Calculate cleaned ref for global duplicate checking
     cleaned_original_ref = re.sub(r'^\d+\.?\s*|https?://\S+', '', ref).lower()
@@ -790,100 +808,97 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
     cleaned_original_ref = re.sub(r'\s+', ' ', cleaned_original_ref).strip()
 
     
-    # 1. DOI Priority Lookup
-    if extracted_doi:
-        print(f"    [1] Extracted DOI: {extracted_doi}. Querying API...")
-        crossref_data = query_crossref_by_doi(extracted_doi)
-        
-        if crossref_data:
-            print("    -> DOI Found in API.")
-            api_doi = crossref_data.doi
+    try:
+        # 1. DOI Priority Lookup
+        if extracted_doi:
+            print(f"    [1] Extracted DOI: {extracted_doi}. Querying API...")
+            crossref_data = query_crossref_by_doi(extracted_doi, ref_index=idx)
             
-            # Reconstruct APA for Verification
-            matched_ref_str = format_reference_apa(crossref_data)
-            
-            # Fuzzy match verification
-            # Compare original text vs Reconstructed APA
-            similarity = fuzz.token_sort_ratio(ref, matched_ref_str)
-            print(f"    -> Similarity Check (Original vs API Ref): {similarity}%")
-            
-            if similarity >= 60: # Threshold can be tuned, 60-70 reasonable for citation variations
-                match_status = "match"
+            if crossref_data:
+                print("    -> DOI Found in API.")
+                api_doi = crossref_data.doi
+                
+                # Reconstruct APA for Verification
+                matched_ref_str = format_reference_apa(crossref_data)
+                
+                # Fuzzy match verification
+                # Compare original text vs Reconstructed APA
+                similarity = fuzz.token_sort_ratio(ref, matched_ref_str)
+                print(f"    -> Similarity Check (Original vs API Ref): {similarity}%")
+                
+                if similarity >= 60:
+                    match_status = "match"
+                else:
+                    match_status = "doi_mismatch"
+                    print(f"    -> WARNING: DOI Mismatch (Similarity {similarity} < 60)")
             else:
-                match_status = "doi_mismatch"
-                print(f"    -> WARNING: DOI Mismatch (Similarity {similarity} < 60)")
-        else:
-             print("    -> DOI Not Found in API.")
-    
-    # 2. Text Search Fallback (Only if no DOI data found yet)
-    if not crossref_data:
-        print("    [2] DOI Lookup Failed/Empty. Trying Text Search...")
-        crossref_data = query_crossref_search(ref)
+                print("    -> DOI Not Found in API.")
+        
+        # 2. Text Search Fallback (Only if no DOI data found yet)
+        if not crossref_data:
+            print("    [2] DOI Lookup Failed/Empty. Trying Text Search...")
+            crossref_data = query_crossref_search(ref, ref_index=idx)
+            if crossref_data:
+                print("    -> Search Result found.")
+                matched_ref_str = format_reference_apa(crossref_data)
+                similarity = fuzz.token_sort_ratio(ref, matched_ref_str)
+                print(f"    -> Similarity: {similarity}%")
+                
+                if similarity >= 60:
+                    match_status = "match"
+                    api_doi = crossref_data.doi
+                else:
+                    print(f"    -> Low similarity search result. Discarding.")
+                    crossref_data = None
+        
+        # 3. Process matched data
         if crossref_data:
-             print("    -> Search Result found.")
-             matched_ref_str = format_reference_apa(crossref_data)
-             similarity = fuzz.token_sort_ratio(ref, matched_ref_str)
-             print(f"    -> Similarity: {similarity}%")
-             
-             if similarity >= 60:
-                 match_status = "match"
-                 api_doi = crossref_data.doi
-             else:
-                 # If search result is low similarity, it's NOT a match.
-                 # We discard this as a false positive from search, or handle as unmatched.
-                 print(f"    -> Low similarity search result. Discarding.")
-                 crossref_data = None # Reset
-    
-    # 3. Process matched data
-    if crossref_data:
-        # Populate basic info
-        title = crossref_data.title
-        journal = crossref_data.journal_full_title
-        if crossref_data.year:
-            year = str(crossref_data.year)
-            current_year = datetime.datetime.now().year
-            if current_year - int(year) <= 5: is_recent_5 = True
-            if current_year - int(year) <= 3: is_recent_3 = True
+            title = crossref_data.title
+            journal = crossref_data.journal_full_title
+            if crossref_data.year:
+                year = str(crossref_data.year)
+                current_year = datetime.datetime.now().year
+                if current_year - int(year) <= 5: is_recent_5 = True
+                if current_year - int(year) <= 3: is_recent_3 = True
 
-        all_authors = crossref_data.all_authors
-        has_retraction = crossref_data.has_retraction
-        has_correction = crossref_data.has_correction
-        
-        # Check NLM for PMID, PMCID and additional retraction/correction info if DOI exists
-        if crossref_data.doi and NCBI_API_KEY:
-             # 查询 PMID 和 PMCID
-             pmid, pmcid = query_nlm_ids_by_doi(crossref_data.doi, NCBI_API_KEY)
-             # 使用已获取的PMID查询更正和撤稿信息（避免重复调用esearch）
-             corr, retr = query_nlm_for_corrections(crossref_data.doi, NCBI_API_KEY, pmid)
-             if retr: has_retraction = True
-             if corr: has_correction = True
+            all_authors = crossref_data.all_authors
+            has_retraction = crossref_data.has_retraction
+            has_correction = crossref_data.has_correction
+            
+            # Check NLM for PMID, PMCID and additional retraction/correction info
+            if crossref_data.doi and NCBI_API_KEY:
+                pmid, pmcid = query_nlm_ids_by_doi(crossref_data.doi, NCBI_API_KEY, ref_index=idx)
+                corr, retr = query_nlm_for_corrections(crossref_data.doi, NCBI_API_KEY, pmid, ref_index=idx)
+                if retr: has_retraction = True
+                if corr: has_correction = True
 
-        # Update global counters
-        if api_doi:
-             update_doi_count(api_doi, all_doi_count)
-        # Update global author count using cleaned all_authors list
-        for author_name in all_authors:
-            if author_name:
-                all_authors_count[author_name] = all_authors_count.get(author_name, 0) + 1
+            # Update global counters
+            if api_doi:
+                update_doi_count(api_doi, all_doi_count)
+            for author_name in all_authors:
+                if author_name:
+                    all_authors_count[author_name] = all_authors_count.get(author_name, 0) + 1
 
-    else:
-        # 4. No match found -> Fallback to Regex Authors and AI Diagnosis
-        print("    [3] No match found. Running Fallbacks...")
-        all_authors = extract_authors_regex(ref)
-        # Update authors from regex (Optional: might be noisy, but requested to collect all)
-        # We need to construct simplified Author objects to use update_author_count if we want generic global counting
-        # For now, we just adding to all_authors list in result
-        
-        # AI Diagnosis - now returns (tag, extracted_title, extracted_url, search_query)
-        ai_diag, ai_extracted_title, ai_extracted_url, ai_search_query = ai_diagnosis_ref(ref)
-        print(f"    -> AI Diagnosis: {ai_diag}")
-        if ai_extracted_title:
-            print(f"    -> AI Extracted Title: {ai_extracted_title}")
-            title = ai_extracted_title  # Use AI extracted title if Crossref didn't provide one
-        if ai_extracted_url:
-            print(f"    -> AI Extracted URL: {ai_extracted_url}")
-        if ai_search_query:
-            print(f"    -> AI Search Query: {ai_search_query}")
+        else:
+            # 4. No match found -> Fallback to Regex Authors and AI Diagnosis
+            print("    [3] No match found. Running Fallbacks...")
+            all_authors = extract_authors_regex(ref)
+            
+            ai_diag, ai_extracted_title, ai_extracted_url, ai_search_query = ai_diagnosis_ref(ref)
+            print(f"    -> AI Diagnosis: {ai_diag}")
+            if ai_extracted_title:
+                print(f"    -> AI Extracted Title: {ai_extracted_title}")
+                title = ai_extracted_title
+            if ai_extracted_url:
+                print(f"    -> AI Extracted URL: {ai_extracted_url}")
+            if ai_search_query:
+                print(f"    -> AI Search Query: {ai_search_query}")
+
+    except requests.exceptions.Timeout:
+        # 超时异常：标记该条目，不崩溃，继续处理下一条
+        timeout_error = True
+        logger.warning(f"Ref.{idx} 处理超时，已标记为需要重试")
+        print(f"    ⚠⚠ Ref.{idx} 网络请求超时，该条目将在下次运行时重新处理")
 
     # Construct Result Dict
     result_dict = {
@@ -906,6 +921,7 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
         "ai_extracted_url": ai_extracted_url,      # AI extracted URL for WEBSITE type
         "ai_search_query": ai_search_query,        # AI optimized search query
         "cleaned_original_ref": cleaned_original_ref,
+        "timeout_error": timeout_error,            # 超时标记
         # Legacy/UI compatibility fields (Optional, if UI needs them)
         "matched_ref": matched_ref_str if matched_ref_str else "Not Found",
         "similarity": 0, # Placeholder or calculated above

@@ -11,6 +11,7 @@ import os
 import time
 import datetime
 import random
+import threading
 
 # 导入核心处理函数
 from generate_json import (
@@ -39,6 +40,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+@st.cache_resource
+def get_system_status():
+    """创建全局共享状态，包含信号量、任务开始时间和取消标志"""
+    return {
+        "lock": threading.Semaphore(3),  # 允许最多3人同时查询
+        "start_time": None,
+        "active_users": 0,               # 当前活跃用户数
+        "cancel_requested": False
+    }
+
+
 def get_text_hash(text: str) -> str:
     """计算文本的 MD5 哈希值作为缓存键"""
     return hashlib.md5(text.encode('utf-8')).hexdigest()
@@ -49,6 +61,7 @@ def get_text_hash(text: str) -> str:
 def process_single_ref_cached(ref_text: str, ref_hash: str) -> dict:
     """
     缓存单条参考文献的处理结果
+    如果上次处理超时（timeout_error=True），则不缓存，下次重新请求
     
     Args:
         ref_text: 参考文献原文
@@ -57,10 +70,15 @@ def process_single_ref_cached(ref_text: str, ref_hash: str) -> dict:
     Returns:
         处理结果字典
     """
-    # 注意：这里不传递共享的计数器，因为缓存函数需要独立运行
     all_authors_count = {}
     all_doi_count = {}
-    return process_single_reference_new(ref_text, 1, 1, all_authors_count, all_doi_count)
+    result = process_single_reference_new(ref_text, 1, 1, all_authors_count, all_doi_count)
+    
+    # 如果该条目超时，抛出异常使 st.cache_data 不缓存此结果
+    if result.get('timeout_error', False):
+        raise Exception("TIMEOUT_NO_CACHE")
+    
+    return result
 
 
 def process_references(refs: list) -> tuple:
@@ -83,13 +101,48 @@ def process_references(refs: list) -> tuple:
     status_container = st.empty()
     
     for idx, ref in enumerate(refs, 1):
+        # 检查是否被取消
+        system_status = get_system_status()
+        if system_status["cancel_requested"]:
+            status_container.warning(f"任务已被中断，已处理 {idx-1}/{total} 条")
+            break
+        
         status_container.info(f"正在处理 {idx}/{total}：{ref[:50]}...")
         
         # 计算该条参考文献的哈希
         ref_hash = get_text_hash(ref)
         
         # 使用缓存处理
-        result = process_single_ref_cached(ref, ref_hash)
+        try:
+            result = process_single_ref_cached(ref, ref_hash)
+        except Exception as e:
+            if "TIMEOUT_NO_CACHE" in str(e):
+                # 超时的条目：构造临时结果，标记 timeout_error
+                result = {
+                    "original_text": ref,
+                    "extracted_doi": "",
+                    "api_doi": "",
+                    "match_status": "None",
+                    "has_retraction": False,
+                    "has_correction": False,
+                    "title": "",
+                    "journal": "",
+                    "year": "",
+                    "all_authors": [],
+                    "pmid": "",
+                    "pmcid": "",
+                    "is_recent_5_years": False,
+                    "is_recent_3_years": False,
+                    "ai_diagnosis": "",
+                    "ai_extracted_title": "",
+                    "ai_extracted_url": "",
+                    "ai_search_query": "",
+                    "timeout_error": True,
+                    "matched_ref": "Not Found",
+                    "similarity": 0,
+                }
+            else:
+                raise
         results.append(result)
         
         # 更新全局计数器（用于高频作者统计）
@@ -304,6 +357,36 @@ def display_results_table(results: list):
 
 def main():
     """主函数"""
+    # --- 侧边栏管理工具 ---
+    system_status = get_system_status()
+    with st.sidebar:
+        st.header("管理工具")
+        st.divider()
+        
+        # 实时显示当前状态
+        st.subheader("系统状态")
+        current_active = system_status["active_users"]
+        st.metric("当前活跃任务数", f"{current_active} / 3")
+        
+        if current_active > 0:
+            st.info(f"系统运行中，当前 {current_active} 人正在使用")
+        else:
+            st.success("系统空闲，可正常使用")
+        
+        st.divider()
+        
+        # 紧急重置按钮
+        st.subheader("紧急操作")
+        st.caption("不要随便点！当系统出现死锁（没人使用却显示繁忙）时，可使用下方按钮强制重置。")
+        if st.button("强制重置系统锁", use_container_width=True, type="secondary"):
+            system_status["lock"] = threading.Semaphore(3)
+            system_status["active_users"] = 0
+            system_status["cancel_requested"] = False
+            system_status["start_time"] = None
+            st.toast("系统锁已强制重置", icon="✅")
+            st.success("系统锁已强制重置，信号量已恢复为 3。")
+    
+    # --- 主界面 ---
     # 标题区域 - 改为原生简洁风格
     st.title("参考文献核查")
     st.caption("粘贴参考文献 → 自动匹配验证 → 生成核查报告")
@@ -349,7 +432,7 @@ def main():
     )
     
     # 处理按钮
-    col1, col2, col3 = st.columns([1, 1, 2])
+    col1, col2 = st.columns([1, 1])
     with col1:
         process_btn = st.button("开始处理", type="primary", use_container_width=True)
     with col2:
@@ -369,22 +452,82 @@ def main():
             st.warning("请先输入参考文献")
             return
         
-        # 按行分割，过滤空行
-        refs = [line.strip() for line in ref_input.strip().split('\n') if line.strip()]
+        # 获取全局共享状态
+        system_status = get_system_status()
         
-        if len(refs) == 0:
-            st.warning("未识别到有效的参考文献，请检查输入格式")
+        # 自动超时保护：如果任务超过3小时，强制释放一个信号量（防止用户关浏览器导致死锁）
+        if system_status["start_time"] and system_status["active_users"] >= 3:
+            elapsed = (datetime.datetime.now() - system_status["start_time"]).total_seconds()
+            if elapsed > 10800:  # 3小时超时
+                system_status["start_time"] = None
+                system_status["cancel_requested"] = False
+                system_status["active_users"] = max(0, system_status["active_users"] - 1)
+                try:
+                    system_status["lock"].release()
+                except ValueError:
+                    pass
+                st.info("上一个任务已超时（3小时），已自动释放一个名额。")
+        
+        # 尝试获取锁（非阻塞模式）
+        if not system_status["lock"].acquire(blocking=False):
+            # 格式化开始时间
+            start_time_str = system_status["start_time"].strftime("%H:%M:%S") if system_status["start_time"] else "不久前"
+            
+            st.warning(f"""
+                ### 系统繁忙：已达到最大并发数（3人）
+                为了避免 API 被并发请求挤爆，系统最多允许3人同时查询。
+                
+                - **当前活跃用户**：{system_status['active_users']} 人
+                - **首个任务开始于**：`{start_time_str}`
+                - **预计用时**：通常处理一篇文章（约30-60条文献）需要 **3-5 分钟**。（实际用时与当前网络环境有关）
+                
+                请您稍后刷新页面再试。
+            """)
             return
         
-        st.info(f"共识别到 **{len(refs)}** 条参考文献，开始处理...")
-        
-        # 处理参考文献
-        results, stats = process_references(refs)
-        
-        # 存储到 session_state 以便后续显示
-        st.session_state['results'] = results
-        st.session_state['stats'] = stats
-        st.session_state['project_id'] = project_id
+        try:
+            # 记录任务开始时间，重置取消标志，增加活跃用户数
+            if system_status["start_time"] is None:
+                system_status["start_time"] = datetime.datetime.now()
+            system_status["active_users"] = system_status.get("active_users", 0) + 1
+            system_status["cancel_requested"] = False
+            
+            # 按行分割，过滤空行
+            refs = [line.strip() for line in ref_input.strip().split('\n') if line.strip()]
+            
+            if len(refs) == 0:
+                st.warning("未识别到有效的参考文献，请检查输入格式")
+                return
+            
+            st.info(f"共识别到 **{len(refs)}** 条参考文献，开始处理...")
+            
+            # 处理参考文献
+            results, stats = process_references(refs)
+            
+            # 检查是否有超时的条目，向用户展示警告
+            timeout_refs = []
+            for i, res in enumerate(results, 1):
+                if res.get('timeout_error', False):
+                    timeout_refs.append(f"Ref.{i}")
+            
+            if timeout_refs:
+                st.warning(
+                    f"⚠️ 以下条目因网络超时未能获取数据：{', '.join(timeout_refs)}。\n\n"
+                    f"建议：获取全部文献后，**不要清除缓存**，重新点击「开始处理」，"
+                    f"系统将仅重新请求超时的条目，已成功的条目会直接使用缓存。"
+                )
+            
+            # 存储到 session_state 以便后续显示
+            st.session_state['results'] = results
+            st.session_state['stats'] = stats
+            st.session_state['project_id'] = project_id
+        finally:
+            # 处理完成后，减少活跃用户数并释放信号量
+            system_status["active_users"] = max(0, system_status.get("active_users", 1) - 1)
+            if system_status["active_users"] == 0:
+                system_status["start_time"] = None
+                system_status["cancel_requested"] = False
+            system_status["lock"].release()
     
     # 显示结果（如果有）
     if 'results' in st.session_state and 'stats' in st.session_state:
