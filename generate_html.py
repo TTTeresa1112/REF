@@ -456,16 +456,28 @@ def generate_html_report(json_file_path: str) -> str:
         
         # 确定状态分类 (用于筛选) - 重复优先级较高
         status_category = 'unknown'
+        
+        # 1. 撤稿 (最严重，保持第一)
         if has_retraction is True or has_retraction == '是':
             status_category = 'retracted'
-        elif ai_diag == 'HIGH_RISK':
-            status_category = 'high-risk'
+        
+        # 2. DOI重复 (确定的错误，优先级调高)
         elif is_doi_dup:
             status_category = 'doi-dup'
+            
+        # 3. 模糊重复 (疑似错误，优先级调高)
         elif is_fuzzy_dup:
             status_category = 'fuzzy-dup'
+            
+        # 4. DOI不符 (确定的错误，优先级调高)
         elif match_status == 'doi_mismatch':
             status_category = 'mismatch'
+            
+        # 5. 无法判断 (这是兜底的"不知道"，优先级应该放低)
+        elif ai_diag == 'HIGH_RISK':
+            status_category = 'high-risk'
+            
+        # 6. 通过
         elif match_status == 'match':
             status_category = 'match'
         
