@@ -190,11 +190,11 @@ class CrossrefData:
 
         return cls(
             doi=item.get("DOI", ""),
-            title=(item.get("title", [""])[0] or ""),
+            title=(item.get("title") or [""])[0] or "",
             authors=authors,
             journal_short_title=(item.get("short-container-title") or [""])[0] or "",
             journal_full_title=(item.get("container-title") or [""])[0] or "",
-            year=item.get("issued", {}).get("date-parts", [[None]])[0][0],
+            year=(item.get("issued", {}).get("date-parts") or [[None]])[0][0] if (item.get("issued", {}).get("date-parts") or [[None]]) and (item.get("issued", {}).get("date-parts") or [[None]])[0] else None,
             volume=item.get("volume", ""),
             issue=item.get("issue", ""),
             page=item.get("page", ""),
