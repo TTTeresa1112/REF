@@ -827,7 +827,7 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
                 similarity = fuzz.token_sort_ratio(ref, matched_ref_str)
                 print(f"    -> Similarity Check (Original vs API Ref): {similarity}%")
                 
-                if similarity >= 60:
+                if similarity >= 65:
                     match_status = "match"
                 else:
                     match_status = "doi_mismatch"
