@@ -801,6 +801,7 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
     pmid = ""    # PubMed ID
     pmcid = ""   # PubMed Central ID
     timeout_error = False    # 超时标记
+    similarity = 0    # 相似度分数
     
     # Calculate cleaned ref for global duplicate checking
     cleaned_original_ref = re.sub(r'^\d+\.?\s*|https?://\S+', '', ref).lower()
@@ -844,12 +845,21 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
                 similarity = fuzz.token_sort_ratio(ref, matched_ref_str)
                 print(f"    -> Similarity: {similarity}%")
                 
-                if similarity >= 60:
-                    match_status = "match"
+                if similarity >= 75:
                     api_doi = crossref_data.doi
+                    if extracted_doi and extracted_doi.lower() != api_doi.lower():
+                        match_status = "doi_mismatch"
+                        print(f"    -> WARNING: DOI Mismatch (Extracted: {extracted_doi}, API: {api_doi})")
+                    else:
+                        match_status = "match"
                 else:
                     print(f"    -> Low similarity search result. Discarding.")
                     crossref_data = None
+            
+            # 如果提供了DOI，但是既没有通过DOI直接找到，也没有通过文本搜索找到相似的结果，则直接归类为DOI不符
+            if not crossref_data and extracted_doi:
+                match_status = "doi_mismatch"
+                print("    -> No high similarity hit found, marking as DOI mismatch because extracted DOI was invalid.")
         
         # 3. Process matched data
         if crossref_data:
@@ -924,7 +934,7 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
         "timeout_error": timeout_error,            # 超时标记
         # Legacy/UI compatibility fields (Optional, if UI needs them)
         "matched_ref": matched_ref_str if matched_ref_str else "Not Found",
-        "similarity": 0, # Placeholder or calculated above
+        "similarity": similarity, # Calculated above
     }
     
     return result_dict
