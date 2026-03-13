@@ -112,6 +112,8 @@ class CrossrefData:
     has_retraction: bool = False
     correction_doi: str = ""
     retraction_doi: str = ""
+    is_retraction_notice: bool = False
+    is_erratum_notice: bool = False
     all_authors: List[str] = None
 
     @classmethod
@@ -134,6 +136,8 @@ class CrossrefData:
         
         has_correction = False
         has_retraction = False
+        is_retraction_notice = False
+        is_erratum_notice = False
         correction_doi = ""
         retraction_doi = ""
 
@@ -202,6 +206,8 @@ class CrossrefData:
             has_retraction=has_retraction,
             correction_doi=correction_doi,
             retraction_doi=retraction_doi,
+            is_retraction_notice=is_retraction_notice,
+            is_erratum_notice=is_erratum_notice,
             all_authors=all_authors_list
         )
 
@@ -640,14 +646,15 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "", 
     结合了 pubtype 检查 (最准的状态) 和 commentscorrections 检查 (找撤稿声明链接)。
     """
     if not api_key:
-        return "", ""
+        return "", "", False, False
     if not doi and not pmid:
-        return "", ""
+        return "", "", False, False
         
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     params = {"db": "pubmed", "retmode": "json", "api_key": api_key}
     headers = {"User-Agent": USER_AGENT}
     correction_doi, retraction_doi = "", ""
+    is_retraction_notice, is_erratum_notice = False, False
     
     # ===================== 【新增常量】统归的reftype短语列表 =====================
     # 统归为更正的reftype（精确匹配）
@@ -675,11 +682,11 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "", 
             search_data = response.json()
             id_list = search_data.get("esearchresult", {}).get("idlist", [])
             if not id_list:
-                return "", ""
+                return "", "", False, False
             pmid = id_list[0]
         
         if not pmid:
-            return "", ""
+            return "", "", False, False
             
         # 2. 查 Summary (核心步骤)
         summary_params = params.copy()
@@ -693,12 +700,28 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "", 
         if "result" in summary_data and str(pmid) in summary_data["result"]:
             doc_info = summary_data["result"][str(pmid)]
             
-            # 检查 pubtype 列表 (原有逻辑，未修改)
+            # 检查 pubtype 列表，针对撤稿和更正
             pubtype_list = doc_info.get("pubtype", [])
+            
+            # 判断撤稿: Retracted Publication (原文)
             if "Retracted Publication" in pubtype_list:
-                print(f"    [!] PubType 标记为已撤稿")
+                print(f"    [!] PubType 标记为已撤稿 (Retracted Publication)")
                 if not retraction_doi:
-                    retraction_doi = "Status: Retracted Publication"
+                    retraction_doi = "Status: Retraction"
+
+            # 判断撤稿声明: Retraction Notice
+            if "Retraction Notice" in pubtype_list:
+                print(f"    [!] PubType 标记为撤稿声明 (Retraction Notice)")
+                is_retraction_notice = True
+                if not retraction_doi:
+                    retraction_doi = "Status: Retraction Notice"
+
+            # 判断更正声明: Published Erratum
+            if "Published Erratum" in pubtype_list:
+                print(f"    [!] PubType 标记为更正声明 (Published Erratum)")
+                is_erratum_notice = True
+                if not correction_doi:
+                    correction_doi = "Status: Published Erratum"
 
             # 检查 references 字段 (核心修改：模糊匹配 → 精确匹配指定短语)
             if "references" in doc_info:
@@ -755,7 +778,7 @@ def query_nlm_for_corrections(doi: str, api_key: Optional[str], pmid: str = "", 
     except requests.exceptions.RequestException as e:
         logger.error(f"NLM查询错误 (DOI: {doi}): {e}")
         
-    return correction_doi, retraction_doi
+    return correction_doi, retraction_doi, is_retraction_notice, is_erratum_notice
 
 
 def update_author_count(authors: List[Author], all_authors_count: dict):
@@ -786,6 +809,10 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
     match_status = None
     has_retraction = False
     has_correction = False
+    correction_doi = ""
+    retraction_doi = ""
+    is_retraction_notice = False
+    is_erratum_notice = False
     title = ""
     journal = ""
     year = ""
@@ -874,13 +901,25 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
             all_authors = crossref_data.all_authors
             has_retraction = crossref_data.has_retraction
             has_correction = crossref_data.has_correction
+            is_retraction_notice = crossref_data.is_retraction_notice
+            is_erratum_notice = crossref_data.is_erratum_notice
+            correction_doi = crossref_data.correction_doi
+            retraction_doi = crossref_data.retraction_doi
             
             # Check NLM for PMID, PMCID and additional retraction/correction info
             if crossref_data.doi and NCBI_API_KEY:
                 pmid, pmcid = query_nlm_ids_by_doi(crossref_data.doi, NCBI_API_KEY, ref_index=idx)
-                corr, retr = query_nlm_for_corrections(crossref_data.doi, NCBI_API_KEY, pmid, ref_index=idx)
-                if retr: has_retraction = True
-                if corr: has_correction = True
+                corr, retr, is_retr_notice, is_err_notice = query_nlm_for_corrections(crossref_data.doi, NCBI_API_KEY, pmid, ref_index=idx)
+                if retr:
+                    has_retraction = True
+                    if not retraction_doi or retraction_doi.startswith('Status:'):
+                        retraction_doi = retr
+                if corr:
+                    has_correction = True
+                    if not correction_doi or correction_doi.startswith('Status:'):
+                        correction_doi = corr
+                if is_retr_notice: is_retraction_notice = True
+                if is_err_notice: is_erratum_notice = True
 
             # Update global counters
             if api_doi:
@@ -917,7 +956,11 @@ def process_single_reference_new(ref: str, idx: int, total_refs: int, all_author
         "api_doi": api_doi,
         "match_status": match_status if match_status else "None",
         "has_retraction": has_retraction,
-        "has_correction": has_correction, # Added missing field
+        "has_correction": has_correction,
+        "correction_doi": correction_doi,
+        "retraction_doi": retraction_doi,
+        "is_retraction_notice": is_retraction_notice,
+        "is_erratum_notice": is_erratum_notice,
         "title": title,
         "journal": journal,
         "year": year,
@@ -1011,9 +1054,9 @@ def calculate_statistics(results: List[dict], total_refs: int, fuzzy_duplicate_p
     stats = {
         "total_references": total_refs, "recent_5_years": 0, "recent_3_years": 0,
         "with_doi": 0, "without_doi": 0, "duplicate_refs": 0, "matched_refs": 0,
-        "correction_count": 0, "retraction_count": 0,
+        "correction_count": 0, "retraction_count": 0, "inappropriate_count": 0,
         "fuzzy_duplicate_pairs": fuzzy_duplicate_pairs,
-        "doi_mismatch_count": 0,  # 新增: DOI不匹配计数
+        "doi_mismatch_count": 0, "high_risk_count": 0,
     }
 
     doi_seen = {}  # 用于检测重复 DOI
@@ -1045,12 +1088,22 @@ def calculate_statistics(results: List[dict], total_refs: int, fuzzy_duplicate_p
 
         # 撤稿/更正统计 - 新版是布尔值，旧版是 "是" 字符串
         has_retraction = result.get('has_retraction', False)
-        if has_retraction is True or has_retraction == "是":
+        is_retraction_notice = result.get('is_retraction_notice', False)
+        is_retracted = (has_retraction is True or has_retraction == "是" or is_retraction_notice is True)
+        if is_retracted:
             stats["retraction_count"] += 1
         
         has_correction = result.get('has_correction', False)
-        if has_correction is True or has_correction == "是":
+        is_erratum_notice = result.get('is_erratum_notice', False)
+        is_corrected = (has_correction is True or has_correction == "是" or is_erratum_notice is True)
+        if is_corrected:
             stats["correction_count"] += 1
+            
+        if is_retracted or is_corrected:
+            stats["inappropriate_count"] += 1
+            
+        if result.get('ai_diagnosis') == 'HIGH_RISK':
+            stats["high_risk_count"] += 1
 
     # 计算百分比
     if total_refs > 0:
@@ -1062,6 +1115,10 @@ def calculate_statistics(results: List[dict], total_refs: int, fuzzy_duplicate_p
         stats["retraction_pct"] = float(stats["retraction_count"] / total_refs * 100)
         stats["with_doi_pct"] = float(stats["with_doi"] / total_refs * 100)
         stats["without_doi_pct"] = float(stats["without_doi"] / total_refs * 100)
+        stats["inappropriate_pct"] = float(stats["inappropriate_count"] / total_refs * 100)
+        stats["high_risk_pct"] = float(stats["high_risk_count"] / total_refs * 100)
+        stats["doi_mismatch_pct"] = float(stats["doi_mismatch_count"] / total_refs * 100)
+        stats["fuzzy_duplicate_pct"] = float(stats["fuzzy_duplicate_pairs"] / total_refs * 100)
     
     return stats
 

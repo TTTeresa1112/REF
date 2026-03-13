@@ -22,7 +22,7 @@ def generate_html_report(json_file_path: str) -> str:
     
     # 1. 数据预计算
     high_risk_count = 0
-    retracted_count = 0
+    inappropriate_count = 0
     match_count = 0
     mismatch_count = 0
     
@@ -62,11 +62,14 @@ def generate_html_report(json_file_path: str) -> str:
         ai_diag = item.get('ai_diagnosis', '')
         match_status = item.get('match_status', '')
         has_retraction = item.get('has_retraction', False)
+        has_correction = item.get('has_correction', False)
+        is_retraction_notice = item.get('is_retraction_notice', False)
+        is_erratum_notice = item.get('is_erratum_notice', False)
         
         if ai_diag == 'HIGH_RISK':
             high_risk_count += 1
-        if has_retraction is True or has_retraction == '是':
-            retracted_count += 1
+        if (has_retraction is True or has_retraction == '是' or is_retraction_notice) or (has_correction is True or has_correction == '是' or is_erratum_notice):
+            inappropriate_count += 1
         if match_status == 'match':
             match_count += 1
         if match_status == 'doi_mismatch':
@@ -91,7 +94,7 @@ def generate_html_report(json_file_path: str) -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>参考文献审计报告</title>
+    <title>参考文献核查报告</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -132,18 +135,37 @@ def generate_html_report(json_file_path: str) -> str:
             align-items: center;
             gap: 10px;
         }
-        .card-icon { font-size: 22px; }
-        .card-content { flex: 1; }
-        .card-value { font-size: 20px; font-weight: 700; color: #1a1a2e; }
-        .card-label { color: #666; font-size: 11px; }
+        .card-icon { display: none; }
+        .card-content { 
+            flex: 1; 
+            display: flex; 
+            flex-direction: row; 
+            align-items: baseline; 
+            justify-content: center; 
+            gap: 6px;
+        }
+        .card-value { font-size: 24px; font-weight: 800; color: #1a1a2e; line-height: 1; }
+        .card-value small { font-size: 13px; font-weight: 500; color: #6b7280; }
+        .card-label { font-size: 13px; font-weight: 600; color: #4b5563; white-space: nowrap; }
         
-        .card-retracted { border-left: 3px solid #dc2626; }
-        .card-highrisk { border-left: 3px solid #f97316; }
-        .card-doi-dup { border-left: 3px solid #ef4444; }
-        .card-fuzzy-dup { border-left: 3px solid #fb923c; }
-        .card-mismatch { border-left: 3px solid #eab308; }
-        .card-match { border-left: 3px solid #22c55e; }
-        .card-stat { border-left: 3px solid #8b5cf6; }
+        /* Row 1 Colors */
+        .card-total { border-left: 4px solid #8b5cf6; background: #f5f3ff; }
+        .card-match { border-left: 4px solid #22c55e; background: #f0fdf4; }
+        .card-doi { border-left: 4px solid #3b82f6; background: #eff6ff; }
+        .card-recent5 { border-left: 4px solid #6366f1; background: #eef2ff; }
+        .card-recent3 { border-left: 4px solid #06b6d4; background: #ecfeff; }
+
+        /* Row 2 Colors (All Red/Warning) */
+        .card-inappropriate { border-left: 4px solid #dc2626; background: #fef2f2; }
+        .card-inappropriate .card-label { color: #991b1b; }
+        .card-highrisk { border-left: 4px solid #ef4444; background: #fef2f2; }
+        .card-highrisk .card-label { color: #991b1b; }
+        .card-mismatch { border-left: 4px solid #ef4444; background: #fef2f2; }
+        .card-mismatch .card-label { color: #991b1b; }
+        .card-doi-dup { border-left: 4px solid #ef4444; background: #fef2f2; }
+        .card-doi-dup .card-label { color: #991b1b; }
+        .card-fuzzy-dup { border-left: 4px solid #ef4444; background: #fef2f2; }
+        .card-fuzzy-dup .card-label { color: #991b1b; }
         
         /* Filters */
         .filters {
@@ -194,6 +216,8 @@ def generate_html_report(json_file_path: str) -> str:
         /* Row backgrounds */
         .row-retracted { background: #ffe6e6 !important; }
         .row-retracted:hover { background: #ffd9d9 !important; }
+        .row-corrected { background: #fffbeb !important; }
+        .row-corrected:hover { background: #fef3c7 !important; }
         .row-high-risk { background: #fff0f0 !important; }
         .row-high-risk:hover { background: #ffe6e6 !important; }
         .row-doi-dup { background: #fee2e2 !important; }
@@ -238,6 +262,30 @@ def generate_html_report(json_file_path: str) -> str:
             border-radius: 4px;
             display: inline-block;
             border: 1px solid #fdba74;
+        }
+
+        .retracted-warning {
+            font-size: 11px;
+            color: #991b1b;
+            margin-top: 4px;
+            font-weight: 600;
+            background: #fee2e2;
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+            border: 1px solid #fca5a5;
+        }
+
+        .corrected-warning {
+            font-size: 11px;
+            color: #92400e;
+            margin-top: 4px;
+            font-weight: 600;
+            background: #fef3c7;
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+            border: 1px solid #fde68a;
         }
         
         /* Badges */
@@ -315,76 +363,70 @@ def generate_html_report(json_file_path: str) -> str:
             <p>生成时间: ''' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + '''</p>
         </div>
         
-        <!-- Dashboard - Compact Cards -->
+        <!-- Dashboard - Row 1 -->
         <div class="dashboard">
-            <div class="card card-retracted">
-                <div class="card-icon">🚨</div>
+            <div class="card card-total">
                 <div class="card-content">
-                    <div class="card-value">''' + str(retracted_count) + ''' <small>(''' + calc_pct(retracted_count) + ''')</small></div>
-                    <div class="card-label">撤稿</div>
-                </div>
-            </div>
-            <div class="card card-highrisk">
-                <div class="card-icon">⚠️</div>
-                <div class="card-content">
-                    <div class="card-value">''' + str(high_risk_count) + ''' <small>(''' + calc_pct(high_risk_count) + ''')</small></div>
-                    <div class="card-label">无法判断</div>
-                </div>
-            </div>
-            <div class="card card-doi-dup">
-                <div class="card-icon">🔴</div>
-                <div class="card-content">
-                    <div class="card-value">''' + str(doi_duplicate_count) + ''' <small>(''' + calc_pct(doi_duplicate_count) + ''')</small></div>
-                    <div class="card-label">DOI重复</div>
-                </div>
-            </div>
-            <div class="card card-fuzzy-dup">
-                <div class="card-icon">🟠</div>
-                <div class="card-content">
-                    <div class="card-value">''' + str(fuzzy_duplicate_count) + ''' <small>(''' + calc_pct(fuzzy_duplicate_count) + ''')</small></div>
-                    <div class="card-label">模糊重复</div>
-                </div>
-            </div>
-            <div class="card card-mismatch">
-                <div class="card-icon">💀</div>
-                <div class="card-content">
-                    <div class="card-value">''' + str(mismatch_count) + ''' <small>(''' + calc_pct(mismatch_count) + ''')</small></div>
-                    <div class="card-label">DOI不符</div>
+                    <div class="card-label">总参考文献:</div>
+                    <div class="card-value">''' + str(total_refs) + '''</div>
                 </div>
             </div>
             <div class="card card-match">
-                <div class="card-icon">✅</div>
                 <div class="card-content">
+                    <div class="card-label">匹配成功:</div>
                     <div class="card-value">''' + str(match_count) + ''' <small>(''' + calc_pct(match_count) + ''')</small></div>
-                    <div class="card-label">通过</div>
                 </div>
             </div>
-            <div class="card card-stat">
-                <div class="card-icon">📊</div>
+             <div class="card card-doi">
                 <div class="card-content">
-                    <div class="card-value">''' + str(total_refs) + '''</div>
-                    <div class="card-label">总计</div>
-                </div>
-            </div>
-            <div class="card card-stat">
-                <div class="card-icon">🔗</div>
-                <div class="card-content">
+                    <div class="card-label">有DOI:</div>
                     <div class="card-value">''' + str(stats.get('with_doi', 0)) + ''' <small>(''' + calc_pct(stats.get('with_doi', 0)) + ''')</small></div>
-                    <div class="card-label">有DOI</div>
                 </div>
             </div>
-            <div class="card card-stat">
-                <div class="card-icon">📅</div>
+            <div class="card card-recent5">
                 <div class="card-content">
+                    <div class="card-label">近5年:</div>
                     <div class="card-value">''' + str(stats.get('recent_5_years', 0)) + ''' <small>(''' + calc_pct(stats.get('recent_5_years', 0)) + ''')</small></div>
-                    <div class="card-label">近5年</div>
                 </div>
             </div>
-            <div class="card card-stat">
-                <div class="card-icon">🗓️</div>
+            <div class="card card-recent3">
                 <div class="card-content">
+                    <div class="card-label">近3年:</div>
                     <div class="card-value">''' + str(stats.get('recent_3_years', 0)) + ''' <small>(''' + calc_pct(stats.get('recent_3_years', 0)) + ''')</small></div>
-                    <div class="card-label">近3年</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard - Row 2 -->
+        <div class="dashboard">
+            <div class="card card-inappropriate">
+                <div class="card-content">
+                    <div class="card-label">不合适引用:</div>
+                    <div class="card-value">''' + str(inappropriate_count) + ''' <small>(''' + calc_pct(inappropriate_count) + ''')</small></div>
+                </div>
+            </div>
+            <div class="card card-highrisk">
+                <div class="card-content">
+                    <div class="card-label">AI无法判断:</div>
+                    <div class="card-value">''' + str(high_risk_count) + ''' <small>(''' + calc_pct(high_risk_count) + ''')</small></div>
+                </div>
+            </div>
+             <div class="card card-mismatch">
+                <div class="card-content">
+                    <div class="card-label">DOI不符:</div>
+                    <div class="card-value">''' + str(mismatch_count) + ''' <small>(''' + calc_pct(mismatch_count) + ''')</small></div>
+                </div>
+            </div>
+            <div class="card card-doi-dup">
+                <div class="card-content">
+                    <div class="card-label">DOI重复:</div>
+                    <div class="card-value">''' + str(doi_duplicate_count) + ''' <small>(''' + calc_pct(doi_duplicate_count) + ''')</small></div>
+                </div>
+            </div>
+            <div class="card card-fuzzy-dup">
+                <div class="card-content">
+                    <div class="card-label">可能重复:</div>
+                    <div class="card-value">''' + str(fuzzy_duplicate_count) + ''' <small>(''' + calc_pct(fuzzy_duplicate_count) + ''')</small></div>
                 </div>
             </div>
         </div>
@@ -403,11 +445,11 @@ def generate_html_report(json_file_path: str) -> str:
                 <select id="statusFilter" onchange="applyFilters()">
                     <option value="all">全部</option>
                     <option value="match">✅ 通过</option>
-                    <option value="high-risk">⚠️ 无法判断</option>
-                    <option value="retracted">🚨 撤稿</option>
+                    <option value="high-risk">⚠️ AI无法判断</option>
+                    <option value="inappropriate">🚫 不合适引用(更正/撤稿)</option>
                     <option value="doi-dup">🔴 DOI重复</option>
-                    <option value="fuzzy-dup">🟠 模糊重复</option>
-                    <option value="mismatch">💀 DOI不符</option>
+                    <option value="fuzzy-dup">🟠 可能重复</option>
+                    <option value="mismatch">❌ DOI不符</option>
                     <option value="unknown">❓ 其他</option>
                 </select>
             </div>
@@ -443,6 +485,11 @@ def generate_html_report(json_file_path: str) -> str:
         ai_diag = item.get('ai_diagnosis', '')
         match_status = item.get('match_status', '')
         has_retraction = item.get('has_retraction', False)
+        has_correction = item.get('has_correction', False)
+        is_retraction_notice = item.get('is_retraction_notice', False)
+        is_erratum_notice = item.get('is_erratum_notice', False)
+        retraction_doi = item.get('retraction_doi', '')
+        correction_doi = item.get('correction_doi', '')
         api_doi = item.get('api_doi', item.get('doi', ''))
         title = item.get('title', '')
         journal = item.get('journal', item.get('journal_full_title', ''))
@@ -450,36 +497,29 @@ def generate_html_report(json_file_path: str) -> str:
         is_recent_5 = item.get('is_recent_5_years', False)
         is_recent_3 = item.get('is_recent_3_years', False)
         
+        is_retracted = has_retraction is True or has_retraction == '是' or is_retraction_notice
+        is_corrected = has_correction is True or has_correction == '是' or is_erratum_notice
+        
         # 获取重复状态
         is_doi_dup = item.get('is_doi_duplicate', False)
         is_fuzzy_dup = bool(item.get('fuzzy_duplicates'))
         
-        # 确定状态分类 (用于筛选) - 重复优先级较高
+        # 独立布尔标记 (每个条目可同时属于多个分类)
+        flag_inappropriate = is_retracted or is_corrected
+        flag_highrisk = (ai_diag == 'HIGH_RISK')
+        flag_mismatch = (match_status == 'doi_mismatch')
+        flag_doi_dup = is_doi_dup
+        flag_fuzzy_dup = is_fuzzy_dup
+        flag_match = (match_status == 'match')
+        
+        # 主状态分类 (仅用于行样式优先级，不影响筛选)
         status_category = 'unknown'
-        
-        # 1. 撤稿 (最严重，保持第一)
-        if has_retraction is True or has_retraction == '是':
-            status_category = 'retracted'
-        
-        # 2. DOI重复 (确定的错误，优先级调高)
-        elif is_doi_dup:
-            status_category = 'doi-dup'
-            
-        # 3. 模糊重复 (疑似错误，优先级调高)
-        elif is_fuzzy_dup:
-            status_category = 'fuzzy-dup'
-            
-        # 4. DOI不符 (确定的错误，优先级调高)
-        elif match_status == 'doi_mismatch':
-            status_category = 'mismatch'
-            
-        # 5. 无法判断 (这是兜底的"不知道"，优先级应该放低)
-        elif ai_diag == 'HIGH_RISK':
-            status_category = 'high-risk'
-            
-        # 6. 通过
-        elif match_status == 'match':
-            status_category = 'match'
+        if flag_inappropriate: status_category = 'inappropriate'
+        elif flag_doi_dup: status_category = 'doi-dup'
+        elif flag_fuzzy_dup: status_category = 'fuzzy-dup'
+        elif flag_mismatch: status_category = 'mismatch'
+        elif flag_highrisk: status_category = 'high-risk'
+        elif flag_match: status_category = 'match'
         
         # 年份分类
         year_category = 'older'
@@ -490,8 +530,10 @@ def generate_html_report(json_file_path: str) -> str:
         
         # 确定行样式
         row_class = ''
-        if status_category == 'retracted':
+        if is_retracted:
             row_class = 'row-retracted'
+        elif is_corrected:
+            row_class = 'row-corrected'
         elif status_category == 'high-risk':
             row_class = 'row-high-risk'
         elif status_category == 'doi-dup':
@@ -503,8 +545,10 @@ def generate_html_report(json_file_path: str) -> str:
         
         # 确定状态图标
         status_icon = ''
-        if status_category == 'retracted':
+        if is_retracted:
             status_icon = '🚨'
+        elif is_corrected:
+            status_icon = '⚠️'
         elif status_category == 'doi-dup':
             status_icon = '🔴'
         elif status_category == 'fuzzy-dup':
@@ -529,7 +573,7 @@ def generate_html_report(json_file_path: str) -> str:
         # AI Badge
         ai_badge = ''
         if ai_diag == 'HIGH_RISK':
-            ai_badge = '<span class="badge red">⚠️ 无法判断</span>'
+            ai_badge = '<span class="badge red">⚠️ AI无法判断</span>'
         elif ai_diag == 'BOOK':
             ai_badge = '<span class="badge blue">📘 书籍</span>'
         elif ai_diag == 'CONF':
@@ -566,6 +610,32 @@ def generate_html_report(json_file_path: str) -> str:
         if fuzzy_msg:
             dup_warning = f'<div class="duplicate-warning">� {fuzzy_msg}</div>'
 
+        # 不合适引用警告 (带可点击链接)
+        inappropriate_warning = ''
+        if is_retraction_notice:
+            inappropriate_warning = '<div class="retracted-warning">🚨 此文献是撤稿声明，属于不合适引用</div>'
+        elif is_retracted:
+            retract_link = ''
+            if retraction_doi and not retraction_doi.startswith('Status:'):
+                if retraction_doi.startswith('PMID:'):
+                    pmid_val = retraction_doi.replace('PMID:', '')
+                    retract_link = f' <a href="https://pubmed.ncbi.nlm.nih.gov/{pmid_val}/" target="_blank" style="color:#991b1b;text-decoration:underline;">查看撤稿声明 ↗</a>'
+                else:
+                    retract_link = f' <a href="https://doi.org/{retraction_doi}" target="_blank" style="color:#991b1b;text-decoration:underline;">查看撤稿声明 ↗</a>'
+            inappropriate_warning = f'<div class="retracted-warning">🚨 此文献已撤稿，属于不合适引用{retract_link}</div>'
+            
+        if is_erratum_notice:
+            inappropriate_warning += '<div class="corrected-warning">⚠️ 此文献是更正声明，属于不合适引用</div>'
+        elif is_corrected:
+            correct_link = ''
+            if correction_doi and not correction_doi.startswith('Status:'):
+                if correction_doi.startswith('PMID:'):
+                    pmid_val = correction_doi.replace('PMID:', '')
+                    correct_link = f' <a href="https://pubmed.ncbi.nlm.nih.gov/{pmid_val}/" target="_blank" style="color:#92400e;text-decoration:underline;">查看更正文章 ↗</a>'
+                else:
+                    correct_link = f' <a href="https://doi.org/{correction_doi}" target="_blank" style="color:#92400e;text-decoration:underline;">查看更正文章 ↗</a>'
+            inappropriate_warning += f'<div class="corrected-warning">⚠️ 此文献已更正，属于不合适引用{correct_link}</div>'
+
         # 操作按钮
         action_btn = ''
         if api_doi:
@@ -592,15 +662,16 @@ def generate_html_report(json_file_path: str) -> str:
                 encoded_query = quote_plus(search_query)
                 action_btn = f'<a href="https://scholar.google.com/scholar?q={encoded_query}" target="_blank" class="btn btn-secondary">Scholar</a>'
         
-    # 生成行HTML (带data属性用于筛选)
+    # 生成行HTML (带data属性用于筛选，每个分类独立标记)
         html_template += f'''
-                    <tr class="{row_class}" data-status="{status_category}" data-year="{year_category}">
+                    <tr class="{row_class}" data-year="{year_category}" data-inappropriate="{'1' if flag_inappropriate else '0'}" data-highrisk="{'1' if flag_highrisk else '0'}" data-mismatch="{'1' if flag_mismatch else '0'}" data-doi-dup="{'1' if flag_doi_dup else '0'}" data-fuzzy-dup="{'1' if flag_fuzzy_dup else '0'}" data-match="{'1' if flag_match else '0'}">
                         <td>{idx}</td>
                         <td class="status-icon">{status_icon}</td>
                         <td>
                             <div class="ref-text">{original_text[:280]}{'...' if len(original_text) > 280 else ''}</div>
                             {ai_badge}
                             
+                            {inappropriate_warning}
                             {doi_dup_warning}
                             {dup_warning}
                             
@@ -624,13 +695,35 @@ def generate_html_report(json_file_path: str) -> str:
             const rows = document.querySelectorAll('#tableBody tr');
             let visibleCount = 0;
             
+            // 筛选项与data属性的映射
+            const filterAttrMap = {
+                'inappropriate': 'data-inappropriate',
+                'high-risk': 'data-highrisk',
+                'mismatch': 'data-mismatch',
+                'doi-dup': 'data-doi-dup',
+                'fuzzy-dup': 'data-fuzzy-dup',
+                'match': 'data-match'
+            };
+            
             rows.forEach(row => {
-                const status = row.getAttribute('data-status');
                 const year = row.getAttribute('data-year');
                 
-                let showByStatus = (statusFilter === 'all' || status === statusFilter);
-                let showByYear = (yearFilter === 'all' || year === yearFilter);
+                // 状态筛选：每个分类独立判断
+                let showByStatus = false;
+                if (statusFilter === 'all') {
+                    showByStatus = true;
+                } else if (statusFilter === 'unknown') {
+                    // "其他"：所有标记都为0的条目
+                    const allZero = Object.values(filterAttrMap).every(attr => row.getAttribute(attr) === '0');
+                    showByStatus = allZero;
+                } else {
+                    const attr = filterAttrMap[statusFilter];
+                    if (attr) {
+                        showByStatus = (row.getAttribute(attr) === '1');
+                    }
+                }
                 
+                let showByYear = (yearFilter === 'all' || year === yearFilter);
                 // 特殊处理: recent5包含recent3
                 if (yearFilter === 'recent5' && (year === 'recent3' || year === 'recent5')) {
                     showByYear = true;

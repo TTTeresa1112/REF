@@ -180,62 +180,48 @@ def display_dashboard(stats: dict):
     st.subheader("统计概览")
     
     # 第一行：核心指标
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        st.metric(
-            "总参考文献",
-            stats.get('total_references', 0)
-        )
+        st.metric("总参考文献", stats.get('total_references', 0))
     with col2:
-        matched = stats.get('matched_refs', 0)
-        matched_pct = stats.get('matched_refs_pct', 0)
-        st.metric(
-            "匹配成功",
-            f"{matched}",
-            f"{matched_pct:.1f}%"
-        )
+        val = stats.get('matched_refs', 0)
+        pct = stats.get('matched_refs_pct', 0)
+        st.metric("匹配成功", f"{val} ({pct:.1f}%)")
     with col3:
-        recent5 = stats.get('recent_5_years', 0)
-        recent5_pct = stats.get('recent_5_years_pct', 0)
-        st.metric(
-            "近5年",
-            f"{recent5}",
-            f"{recent5_pct:.1f}%"
-        )
+        val = stats.get('with_doi', 0)
+        pct = stats.get('with_doi_pct', 0)
+        st.metric("有DOI", f"{val} ({pct:.1f}%)")
     with col4:
-        with_doi = stats.get('with_doi', 0)
-        with_doi_pct = stats.get('with_doi_pct', 0)
-        st.metric(
-            "有DOI",
-            f"{with_doi}",
-            f"{with_doi_pct:.1f}%"
-        )
+        val = stats.get('recent_5_years', 0)
+        pct = stats.get('recent_5_years_pct', 0)
+        st.metric("近5年", f"{val} ({pct:.1f}%)")
+    with col5:
+        val = stats.get('recent_3_years', 0)
+        pct = stats.get('recent_3_years_pct', 0)
+        st.metric("近3年", f"{val} ({pct:.1f}%)")
     
     # 第二行：风险指标
-    col5, col6, col7, col8 = st.columns(4)
-    with col5:
-        st.metric(
-            "撤稿",
-            stats.get('retraction_count', 0),
-            delta_color="inverse"
-        )
+    col6, col7, col8, col9, col10 = st.columns(5)
     with col6:
-        st.metric(
-            "更正",
-            stats.get('correction_count', 0)
-        )
+        val = stats.get('inappropriate_count', 0)
+        pct = stats.get('inappropriate_pct', 0)
+        st.metric("不合适引用", f"{val} ({pct:.1f}%)", delta_color="inverse")
     with col7:
-        st.metric(
-            "DOI重复",
-            stats.get('duplicate_refs', 0),
-            delta_color="inverse"
-        )
+        val = stats.get('high_risk_count', 0)
+        pct = stats.get('high_risk_pct', 0)
+        st.metric("AI无法判断", f"{val} ({pct:.1f}%)", delta_color="inverse")
     with col8:
-        st.metric(
-            "模糊重复",
-            stats.get('fuzzy_duplicate_pairs', 0),
-            delta_color="inverse"
-        )
+        val = stats.get('doi_mismatch_count', 0)
+        pct = stats.get('doi_mismatch_pct', 0)
+        st.metric("DOI不符", f"{val} ({pct:.1f}%)", delta_color="inverse")
+    with col9:
+        val = stats.get('duplicate_refs', 0)
+        pct = stats.get('duplicate_refs_pct', 0)
+        st.metric("DOI重复", f"{val} ({pct:.1f}%)", delta_color="inverse")
+    with col10:
+        val = stats.get('fuzzy_duplicate_pairs', 0)
+        pct = stats.get('fuzzy_duplicate_pct', 0)
+        st.metric("可能重复", f"{val} ({pct:.1f}%)", delta_color="inverse")
 
 
 def generate_and_offer_download(results: list, stats: dict, project_id: str = ""):
@@ -319,17 +305,21 @@ def display_results_table(results: list):
     # 构建表格数据
     table_data = []
     for idx, item in enumerate(results, 1):
-        # 使用文字状态代替emoji
-        if item.get('has_retraction'):
-            status = "撤稿"
-        elif item.get('ai_diagnosis') == 'HIGH_RISK':
-            status = "无法判断"
+        # 使用文字状态标识
+        if item.get('has_retraction') or item.get('is_retraction_notice') or item.get('has_correction') or item.get('is_erratum_notice'):
+            status = "🚫 不合适"
+        elif item.get('match_status') == 'doi_mismatch':
+            status = "❌ DOI不符"
+        elif item.get('is_doi_duplicate'):
+            status = "🔴 DOI重复"
         elif item.get('fuzzy_duplicates'):
-            status = "重复"
+            status = "🟠 可能重复"
+        elif item.get('ai_diagnosis') == 'HIGH_RISK':
+            status = "⚠️ AI无法判断"
         elif item.get('match_status') == 'match':
-            status = "通过"
+            status = "✅ 通过"
         else:
-            status = "未匹配"
+            status = "❓ 未匹配"
         
         table_data.append({
             "#": idx,
@@ -421,6 +411,9 @@ def main():
     # 输入区域
     st.subheader("输入参考文献")
     
+    # 使用占位符，以便在获取输入后将统计数字显示在文本框上方
+    count_placeholder = st.empty()
+    
     ref_input = st.text_area(
         "请粘贴参考文献（每行一条）：",
         height=300,
@@ -430,6 +423,13 @@ def main():
 3. Davis, K., et al. (2021). Important findings in research. Nature Reviews, 10(1), 1-20.""",
         label_visibility="collapsed"
     )
+    
+    # 实时计算有效行数（条目数），去掉空行
+    current_ref_count = len([line for line in ref_input.strip().split('\n') if line.strip()])
+    if current_ref_count > 0:
+        count_placeholder.markdown(f"**当前已识别到 {current_ref_count} 条有效参考文献**")
+    else:
+        count_placeholder.caption("🥰 提示：粘贴后点击页面空白处，即可预览识别出的条目数。")
     
     # 处理按钮
     col1, col2 = st.columns([1, 1])
