@@ -410,7 +410,7 @@ def main():
     
     # 项目ID输入（可选）
     project_id = st.text_input(
-        "项目ID（可选，用于命名导出文件）",
+        "稿件编号（可选，用于命名导出文件）",
         placeholder="例如：EDHT-2026-00008",
         help="输入后，导出的文件名将为：项目ID_年月日时分.html"
     )
